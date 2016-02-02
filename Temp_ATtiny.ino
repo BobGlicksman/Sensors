@@ -1,32 +1,49 @@
+/***********************************************************************************************************/
 // Temp_ATtiny:  Sketch to use ATtiny85 and DS18B20 as an SIS compatible temperature sensor.
 //  *** This is NOT low power code. ***
 //  The code was tested on an Arduino Uno using Serial.print() statements.  Make sure that
 //  #define DEBUG is commented out prior to compiling for the ATtiny85.
+//
+//  Version 001.  Has three defined constants for trip codes:  high temperature, low temperature, and
+//  return to normal temperature.  Each code is sent in one burst when it becomes a new event.  The
+//  temperature is read out at an interval determined by a defined constant.  
+//  (c) 2015,2016 by Bob Glicksman and Jim Schrempp
+/***********************************************************************************************************/
+// Version 001.  This version is not low power.  It uses delay() to implement timing intervals.  This
+//  version does not test battery status, as it is designed for powered use.
+/***********************************************************************************************************/
 
 /********************************* GLOBAL CONSTANTS AND VARIABLES ******************************************/
-#define DEBUG // debug mode sends debugging data to the serial monitor via the serial port.
+//#define DEBUG // debug mode sends debugging data to the serial monitor via the serial port.
+#define FAHRENHEIT // comment this line out to use centigrade scale.
 
+// Temperature limits to trigger transmissions
+const float HIGH_TEMP_LIMIT = 85.0; // degrees F; use degrees C if #define FAHRENHEIT is commented out
+const float LOW_TEMP_LIMIT = 75.0;  // degrees F; use degrees C if #define FAHRENHEIT is commented out
+
+// Time interval between temperature measurements, in milliseconds
+const unsigned long INTERVAL = 2000;  // 2 seconds for testing; use something like 15 minutes or one hour
+
+// Global constants for the transmission codes
+const unsigned long HIGH_TEMP_CODE = 123456;
+const unsigned long LOW_TEMP_CODE = 234567;
+const unsigned long NORMAL_TEMP_CODE = 345678;
+const int BAUD_TIME = 500;  // basic signalling unit is 500 us
+const int CODE_BURST = 20;  // each code is sent 20 times
+
+// Pin definitions
+const int transmitPin = 3; // transmitter on Digital pin 3 (chip in 2) for ATtiny85
+//const int transmitPin = 4;   // transmitter on Digital pin 4 for Uno (testing)  
+const int oneWireBusPin = 4;  // one wire bus on Digital pin 4 (chip in 3) for ATtiny85
+//const int oneWireBusPin = 3;  // one wire bus on Digital pin 4 for Uno (testing)
+ 
 // includes for the DS18B20 temperature sensors
 #include <OneWire.h>    // the one wire bus library
 #include <DallasTemperature.h>  // the DS18B20 chip library -- uses the OneWire library
 
-
-// Define the I/O Pins for the ATtiny85
-const int oneWireBusPin = 3;  // UNO pin for now
-const int transmitPin = 4;    // UNO pin for now
-
 // Global variables for DS18B20 sensors
 OneWire oneWire(oneWireBusPin);   // create an instance of the one wire bus
 DallasTemperature sensors(&oneWire);  // create instance of DallasTemperature devices on the one wire bus
-
-// Global Variables for the transmission codes
-const unsigned long HIGH_TEMP_CODE = 123456;
-const unsigned long LOW_TEMP_CODE = 234567;
-const unsigned long NORMAL_TEMP_CODE = 345678;
-
-// Temperature limits to trigger transmissions
-const float HIGH_TEMP_LIMIT = 85.0; // degrees F
-const float LOW_TEMP_LIMIT = 75.0; // degrees F
 
 /********************************* END OF GLOBAL CONSTANTS AND VARIABLES ***********************************/
 
@@ -36,7 +53,7 @@ void setup()
   //setup serial monitor for debugging - UNO only
   #ifdef DEBUG
     Serial.begin (9600);
-    delay(2000);  // leave some time to opent he serial monitor
+    delay(2000);  // leave some time to open the serial monitor
     Serial.println("Ready ... \n");
   #endif
   
@@ -64,7 +81,11 @@ void loop()
   delay(750); // need 750 ms to convert to 12 bits.  Replace this with power down for sensor
   
   // read the temperature value form the DS18B20 in degrees F
-  newTemp = sensors.getTempFByIndex(0);
+  #ifdef FAHRENHEIT
+    newTemp = sensors.getTempFByIndex(0);
+  #else
+    newTemp = sensors.getTempCByIndex(0);
+  #endif  
   
   #ifdef DEBUG
     Serial.print("temperature reading = ");
@@ -128,7 +149,7 @@ void loop()
     }
   }
    
-  delay(2000); // wait 2 seconds before taking another reading.  Replace this with power down for sensor
+  delay(INTERVAL); // wait before taking another reading.  Replace this with power down for sensor
 
 } 
 /********************************* END OF loop() ***********************************************************/
@@ -141,11 +162,96 @@ void loop()
 
 void transmit(unsigned long code)
 {
-  //*************LEFT OFF HERE *************
-  
+  for (int i = 0; i < CODE_BURST; i++)
+  {
+    sendCodeWord(code);
+  }
+  return;  
 }
-
-
 /**************************************** END OF transmit() ************************************************/
 
+/**************************************** sendCodeWord() **********************************************/
+// sendCodeWord():  sends a 24 bit code to the transmitter data pin.  The code is encoded according
+//  to the EV1527 format, with a zero being one baud unit high and three baun units low, a one being
+//  three baud units high and one baun unit low, and a sync being one baud unit high and 31 baud units
+//  low.  The pattern is shifted out MSB first with SYNC at the end of the code word.
+//
+// Parameters:
+//  code:  the code word to send (the 24 LSBs of an unsigned long will be sent)
+
+void sendCodeWord(unsigned long code)
+{
+  const unsigned long MASK = 0x00800000ul;  // mask off all but bit 23
+  const int CODE_LENGTH = 24; // a code word is 24 bits + sync
+  
+  // send the code word bits  
+  for (int i = 0; i < CODE_LENGTH; i++)
+  {
+    if ( (code & MASK) == 0)
+    {
+      sendZero();
+    }
+    else 
+    {
+      sendOne();
+    }      
+    code = code <<1;
+  }
+  //send the sync
+  sendSync();
+  
+  return;
+}
+/************************************ end of sendCodeWord() *******************************************/
+
+/****************************************** sendZero() ************************************************/
+// sendZero:  helper function to encode a zero as one baud unit high and three baud units low.
+
+void sendZero()
+{
+  // a zero is represented by one baud high and three baud low
+  digitalWrite(transmitPin, HIGH);
+  delayMicroseconds(BAUD_TIME);
+  for(int i = 0; i < 3; i++)
+  {
+      digitalWrite(transmitPin, LOW);
+      delayMicroseconds(BAUD_TIME);
+  }  
+  return; 
+}
+/************************************** end of sendZero() *********************************************/
+
+/****************************************** sendOne() *************************************************/
+// sendOne:  helper function to encode a one as three baud units high and one baud unit low.
+
+void sendOne()
+{
+  // a one is represented by three baud high and one baud low
+  for(int i = 0; i < 3; i++)
+  {
+      digitalWrite(transmitPin, HIGH);
+      delayMicroseconds(BAUD_TIME);
+  } 
+  digitalWrite(transmitPin, LOW);
+  delayMicroseconds(BAUD_TIME); 
+  return; 
+}
+/*************************************** end of sendOne() *********************************************/
+
+/***************************************** sendSync() *************************************************/
+// sendSync:  helper function to encode a sync as one baud unit high and 31 baud units low.
+
+void sendSync()
+{
+  // a sync is represented by one baud high and 31 baud low
+  digitalWrite(transmitPin, HIGH);
+  delayMicroseconds(BAUD_TIME);
+  for(int i = 0; i < 31; i++)
+  {
+      digitalWrite(transmitPin, LOW);
+      delayMicroseconds(BAUD_TIME);
+  }  
+  return; 
+}
+/************************************** end of sendSync() *********************************************/
 
