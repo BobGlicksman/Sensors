@@ -40,8 +40,10 @@ void loop()
     digitalWrite(LED_PIN, LOW);
 
     // put the LED pin back to input, no pullup for low power
-    pinMode(LED_PIN, INPUT);
-    digitalWrite(LED_PIN, LOW);
+    // when a transmitter is connected to this pin, leave it as an
+    //  output and left in the low state!
+//    pinMode(LED_PIN, INPUT);
+//    digitalWrite(LED_PIN, LOW);
 
     // put the ATtiny85 to sleep
     snooze();
